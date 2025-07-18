@@ -1,5 +1,5 @@
 # Apple-Foundation-Model-Reasoning-Swift-Demo
-Experiment to increase the reasoning capabilities of Apple's Foundation Model.
+Testing the reasoning capabilities of Apple's Foundation Model using various methods.
 
 Available modes:
 - Zero-Shot
@@ -13,5 +13,5 @@ Currently every answer will be generated with these configurations:
 
 The modes and prompts were created based on the paper "Prompt Engineering" by Lee Boonstra (Google) -> https://www.kaggle.com/whitepaper-prompt-engineering
 
-(The code currently uses a lot of repeated code for testing, will be removed later)
+
 

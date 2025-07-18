@@ -13,8 +13,6 @@ struct ContentView: View {
     @State private var userInput = ""
     @State private var outputText = "Output will appear here."
     
-    @State private var session: LanguageModelSession? = nil
-    
     private let genOptions = GenerationOptions(sampling: .random(top: 5, seed: nil), temperature: 0.2)
     
     struct DropdownMenu: View {
@@ -67,6 +65,15 @@ struct ContentView: View {
         }
     }
     
+    func generateResponse(helperInput: String, helperInstructions: Instructions) async throws -> String {
+        let session = LanguageModelSession(instructions: helperInstructions)
+        session.prewarm()
+        let prompt = Prompt(helperInput)
+        let response = try await session.respond(to: prompt, options: genOptions)
+        let output = response.content
+        return output
+    }
+    
     var body: some View {
         VStack(spacing: 10) {
             DropdownMenu(zeroShot: $zeroShot, zeroShotCoT: $zeroShotCoT, selfCon: $selfCon, modeSelected: $modeSelected, descText: $descText)
@@ -81,19 +88,20 @@ struct ContentView: View {
             .cornerRadius(8)
             .padding()
             
-            TextField("Type your question here...", text: $userInput, onCommit: {
-                guard modeSelected else { return }
-                guard prevTaskComplete else { return }
-                let input = userInput
-                prevTaskComplete = false
+            if modeSelected {
+                TextField("Type your question here...", text: $userInput, onCommit: {
+                    guard prevTaskComplete else { return }
+                    let input = userInput
+                    prevTaskComplete = false
 
-                Task {
-                    await runPrompt(input)
-                    prevTaskComplete = true
-                }
-            })
-            .textFieldStyle(RoundedBorderTextFieldStyle())
-            .padding()
+                    Task {
+                        await runPrompt(input)
+                        prevTaskComplete = true
+                    }
+                })
+                .textFieldStyle(RoundedBorderTextFieldStyle())
+                .padding()
+            }
         }
         .padding()
     }
@@ -112,83 +120,47 @@ struct ContentView: View {
             }
         }
         
-        let SessionInstructions = Instructions(instructionsTxt)
-        let SelfConInstructions = Instructions("You are provided with three solutions to the same problem. Compare every solution to each other and choose the most common solution. Your output should be a unified answer consisting of the two solutions, which are the most similar in their results.")
-        let SelfConResultInstructions = Instructions("You are provided with two similar solutions to the same question. Rephrase them into one unified answer and output only that unified definitive answer/solution. Do not mention your evaluation process or that there were more that one solution.")
+        let sessionInstructions = Instructions(instructionsTxt)
+        let selfConInstructions = Instructions("You are provided with three solutions to the same problem. Compare every solution to each other and choose the most common solution. Your output should be a unified answer consisting of the two solutions, which are the most similar in their results. Make sure your output contains the result.")
+        let selfConResultInstructions = Instructions("You are provided with two similar solutions to the same question. Rephrase them into one unified answer and output only that unified definitive answer/solution. Do not mention your evaluation process or that there were more that one solution. Make sure your output contains the result.")
         
         if zeroShot || zeroShotCoT {
-            let firstSession = LanguageModelSession(instructions: SessionInstructions)
-            firstSession.prewarm()
-            
             do {
-                let firstPrompt = Prompt(input)
-                let firstResponse = try await firstSession.respond(to: firstPrompt, options: genOptions)
-                let firstOutput = firstResponse.content
-                
-                await MainActor.run {
-                    outputText = firstOutput
-                }
+                try await outputText = generateResponse(helperInput: input, helperInstructions: sessionInstructions)
             } catch {
-                await MainActor.run {
-                    outputText = "Error: \(error.localizedDescription)"
-                }
+                outputText = "Error: \(error.localizedDescription)"
             }
         }
         
         if selfCon {
-            outputText = "Loading first CoT...(1/5)"
-            let firstSession = LanguageModelSession(instructions: SessionInstructions)
-            firstSession.prewarm()
-            
             do {
-                let firstPrompt = Prompt(input)
-                let firstResponse = try await firstSession.respond(to: firstPrompt, options: genOptions)
-                let firstOutput = firstResponse.content
-                print("1ST OUTPUT: \(firstOutput)")
+                //run the initial CoT prompt three times in parallel:
+                outputText = "Loading initial answers (this might take some time)..."
+                async let one = generateResponse(helperInput: input, helperInstructions: sessionInstructions)
+                async let two = generateResponse(helperInput: input, helperInstructions: sessionInstructions)
+                async let three = generateResponse(helperInput: input, helperInstructions: sessionInstructions)
+
+                //wait for all three to finish:
+                let outputONE = try await one
+                let outputTWO = try await two
+                let outputTHREE = try await three
+
+                //now compare the results:
+                outputText = "Loading evaluation..."
+                let evaluationOutput = try await generateResponse(
+                    helperInput: "SOLUTION 1: \(outputONE) SOLUTION 2: \(outputTWO) SOLUTION 3: \(outputTHREE)",
+                    helperInstructions: selfConInstructions
+                )
                 
-                //2nd
-                outputText = "Loading second CoT...(2/5)"
-                let secondSession = LanguageModelSession(instructions: SessionInstructions)
-                secondSession.prewarm()
-                let secondPrompt = Prompt(input)
-                let secondResponse = try await secondSession.respond(to: secondPrompt, options: genOptions)
-                let secondOutput = secondResponse.content
-                print("2ND OUTPUT: \(secondOutput)")
+                //final result output:
+                outputText = "Loading result..."
+                outputText = try await generateResponse(
+                    helperInput: evaluationOutput,
+                    helperInstructions: selfConResultInstructions
+                )
                 
-                //3rd
-                outputText = "Loading third CoT...(3/5)"
-                let thirdSession = LanguageModelSession(instructions: SessionInstructions)
-                thirdSession.prewarm()
-                let thirdPrompt = Prompt(input)
-                let thirdResponse = try await thirdSession.respond(to: thirdPrompt, options: genOptions)
-                let thirdOutput = thirdResponse.content
-                print("3RD OUTPUT: \(thirdOutput)")
-                
-                //Evaluation
-                outputText = "Loading Evaluation...(4/5)"
-                let finalSession = LanguageModelSession(instructions: SelfConInstructions)
-                finalSession.prewarm()
-                let finalPrompt = Prompt("SOLUTION 1: \(firstOutput) SOLUTION 2: \(secondOutput) SOLUTION 3: \(thirdOutput)")
-                let finalResponse = try await finalSession.respond(to: finalPrompt, options: genOptions)
-                let finalOutput = finalResponse.content
-                print("EVALUATION PROCESS: \(finalOutput)")
-                
-                //Evaluation Result
-                outputText = "Loading final answer...(5/5)"
-                let resultSession = LanguageModelSession(instructions: SelfConResultInstructions)
-                resultSession.prewarm()
-                let resultPrompt = Prompt(finalOutput)
-                let resultResponse = try await resultSession.respond(to: resultPrompt, options: genOptions)
-                let resultOutput = resultResponse.content
-                
-                
-                await MainActor.run {
-                    outputText = resultOutput
-                }
             } catch {
-                await MainActor.run {
-                    outputText = "Error: \(error.localizedDescription)"
-                }
+                outputText = "Error: \(error.localizedDescription)"
             }
         }
     }
