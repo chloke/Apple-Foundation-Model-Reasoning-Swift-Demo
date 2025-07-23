@@ -13,6 +13,8 @@ struct ContentView: View {
     @State private var userInput = ""
     @State private var outputText = "Output will appear here."
     
+    private var model = SystemLanguageModel.default
+    
     private let genOptions = GenerationOptions(sampling: .random(top: 5, seed: nil), temperature: 0.2)
     
     struct DropdownMenu: View {
@@ -91,6 +93,7 @@ struct ContentView: View {
             if modeSelected {
                 TextField("Type your question here...", text: $userInput, onCommit: {
                     guard prevTaskComplete else { return }
+                    guard checkForAppleIntelligence() else { return }
                     let input = userInput
                     prevTaskComplete = false
 
@@ -104,6 +107,25 @@ struct ContentView: View {
             }
         }
         .padding()
+    }
+    
+    private func checkForAppleIntelligence() -> Bool {
+        switch model.availability {
+            case .available:
+                return true
+            case .unavailable(.deviceNotEligible):
+                outputText = "Error: Device not eligible for Apple Intelligence."
+                return false
+            case .unavailable(.appleIntelligenceNotEnabled):
+                outputText = "Error: Apple Intelligence not enabled, please turn on in settings."
+                return false
+            case .unavailable(.modelNotReady):
+                outputText = "Error: The model isn't ready because it's still downloading or because of other system reasons."
+                return false
+            case .unavailable(let other):
+                outputText = "Error: The model is unavailable for an unknown reason."
+                return false
+        }
     }
 
     private func runPrompt(_ input: String) async {
